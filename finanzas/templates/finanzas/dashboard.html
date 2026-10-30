@@ -1,0 +1,104 @@
+{% extends "base.html" %}{% load clp static %}
+{% block titulo %}Resumen{% endblock %}
+{% block contenido %}
+<div class="mesnav">
+  <a href="?anio={{ anterior.anio }}&mes={{ anterior.mes }}" aria-label="Mes anterior">‹</a>
+  <h1 style="margin:0">{{ nombre_mes }}</h1>
+  <a href="?anio={{ siguiente.anio }}&mes={{ siguiente.mes }}" aria-label="Mes siguiente">›</a>
+</div>
+
+<div class="acciones">
+  <a class="btn" href="{% url 'movimiento_nuevo' %}?tipo=gasto">+ Gasto</a>
+  <a class="btn sec" href="{% url 'movimiento_nuevo' %}?tipo=ingreso">+ Ingreso</a>
+</div>
+
+<div class="grid3">
+  <div class="card kpi"><div class="muted">Ingresos del mes</div><div class="valor ingreso">{{ r.ingresos|clp }}</div>
+    <div class="muted">Efectivo {{ r.ingresos_efectivo|clp }} · Banco {{ r.ingresos_banco|clp }}</div></div>
+  <div class="card kpi"><div class="muted">Gastos</div><div class="valor gasto">{{ r.gastos|clp }}</div></div>
+  <div class="card kpi"><div class="muted">Balance</div>
+    <div class="valor {% if r.balance < 0 %}gasto{% endif %}">{{ r.balance|clp }}</div>
+    {% if r.tasa_ahorro is not None %}<div class="muted">Ahorras {{ r.tasa_ahorro }}% de lo que entra</div>{% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Saldo registrado por cuenta</h2>
+  <div class="grid3">
+    <div class="kpi"><div class="muted">Efectivo</div><div class="valor">{{ saldos.efectivo|clp }}</div></div>
+    <div class="kpi"><div class="muted">Banco</div><div class="valor">{{ saldos.banco|clp }}</div></div>
+    <div class="kpi"><div class="muted">Total</div><div class="valor ingreso">{{ saldos.total|clp }}</div></div>
+  </div>
+  <div class="muted">Calculado con los ingresos y gastos registrados en cada cuenta.</div>
+</div>
+
+<div class="card">
+  <h2>Cuotas de este mes</h2>
+  <div class="grid3">
+    <div class="kpi"><div class="muted">Cuotas programadas</div><div class="valor gasto">{{ resumen_cuotas.este_mes|clp }}</div></div>
+    <div class="kpi"><div class="muted">Deuda pendiente total</div><div class="valor">{{ resumen_cuotas.deuda_pendiente|clp }}</div></div>
+  </div>
+  <p style="margin-bottom:0"><a href="{% url 'metas' %}">Ver metas y cuotas →</a></p>
+</div>
+
+{% if r.alertas %}
+<div class="card">
+  <h2>Alertas de presupuesto</h2>
+  {% for a in r.alertas %}
+  <div class="alerta {{ a.estado }}">
+    {% if a.estado == "excedido" %}Te pasaste en <b>{{ a.categoria }}</b>: llevas {{ a.gastado|clp }} de {{ a.limite|clp }} ({{ a.porcentaje }}%).
+    {% else %}Vas en el {{ a.porcentaje }}% de <b>{{ a.categoria }}</b>: te quedan {{ a.disponible|clp }}.{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Gastos por categoría</h2>
+  {% if r.por_categoria %}
+    <div style="position:relative;height:260px"><canvas id="grafico"></canvas></div>
+  {% else %}
+    <div class="vacio">Aún no hay gastos este mes.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Últimos movimientos</h2>
+  {% if ultimos %}
+  <ul class="lista">
+    {% for m in ultimos %}
+    <li><div>{{ m.categoria }}<div class="muted">{{ m.fecha|date:"d M" }}{% if m.descripcion %} · {{ m.descripcion }}{% endif %}</div></div>
+        <span class="monto {{ m.tipo }}">{% if m.tipo == "gasto" %}−{% else %}+{% endif %}{{ m.monto|clp }}<div class="muted">{{ m.get_cuenta_display }}</div></span></li>
+    {% endfor %}
+  </ul>
+  <p style="margin:10px 0 0"><a href="{% url 'movimientos' %}?anio={{ r.anio }}&mes={{ r.mes }}">Ver todos →</a></p>
+  {% else %}
+  <div class="vacio">Sin movimientos. Parte registrando tu primer ingreso o gasto.</div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if r.por_categoria %}
+{{ grafico|json_script:"datos-grafico" }}
+<script src="{% static 'finanzas/chart.umd.min.js' %}"></script>
+<script>
+  const datos = JSON.parse(document.getElementById("datos-grafico").textContent);
+  const css = getComputedStyle(document.documentElement);
+  const paleta = ["#0f766e", "#d97706", "#7c3aed", "#db2777", "#2563eb", "#65a30d", "#78716c", "#0891b2"];
+  const fmt = v => "$" + v.toLocaleString("es-CL");
+  new Chart(document.getElementById("grafico"), {
+    type: "bar",
+    data: { labels: datos.labels, datasets: [{ data: datos.valores, backgroundColor: paleta, borderRadius: 6 }] },
+    options: {
+      indexAxis: "y", maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmt(c.raw) } } },
+      scales: {
+        x: { ticks: { callback: fmt, color: css.getPropertyValue("--muted") }, grid: { color: css.getPropertyValue("--line") } },
+        y: { ticks: { color: css.getPropertyValue("--text") }, grid: { display: false } }
+      }
+    }
+  });
+</script>
+{% endif %}
+{% endblock %}

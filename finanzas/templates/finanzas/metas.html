@@ -1,0 +1,25 @@
+{% extends "base.html" %}{% load clp %}
+{% block titulo %}Metas{% endblock %}
+{% block contenido %}
+<h1>Metas de compra</h1>
+<div class="card">
+  <h2>Crear una meta</h2>
+  <form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn">Crear meta</button></form>
+</div>
+<div class="card">
+  <h2>Tus metas</h2>
+  {% if metas %}
+  <ul class="lista">
+    {% for meta in metas %}
+    <li>
+      <a href="{% url 'meta_detalle' meta.pk %}" style="color:inherit;flex:1">
+        <strong>{{ meta.nombre }}</strong>
+        <div class="muted">{{ meta.get_estado_display }} · {{ meta.precio|clp }}</div>
+      </a>
+      <a class="btn sec" href="{% url 'meta_detalle' meta.pk %}">Ver</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<div class="vacio">Aún no tienes metas. Agrega algo que quieras comprar para simular sus cuotas.</div>{% endif %}
+</div>
+{% endblock %}

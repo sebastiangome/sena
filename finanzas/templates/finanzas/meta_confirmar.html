@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% load clp %}
+{% block titulo %}Confirmar compra{% endblock %}
+{% block contenido %}
+<h1>Confirmar compra</h1>
+<div class="card">
+  <h2>{{ meta.nombre }}</h2>
+  <p>Precio: {{ meta.precio|clp }}</p>
+  <p>{{ plan.cuotas }} cuotas de {{ plan.valor_cuota|clp }} · Total: {{ plan.total_pagar|clp }} · Intereses: {{ plan.intereses|clp }}</p>
+  <p>Al confirmar se registrará un gasto por cada cuota y aparecerán en tus movimientos y presupuestos.</p>
+  <form method="post">{% csrf_token %}
+    {{ form.as_p }}
+    <input type="hidden" name="confirmar" value="1">
+    <div class="acciones" style="margin:0">
+      <button class="btn">Confirmar compra</button>
+      <a class="btn sec" href="{% url 'meta_detalle' meta.pk %}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

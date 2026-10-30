@@ -1,0 +1,34 @@
+{% extends "base.html" %}{% load clp %}
+{% block titulo %}Presupuestos{% endblock %}
+{% block contenido %}
+<h1>Presupuestos mensuales</h1>
+<div class="card">
+  <h2>Este mes</h2>
+  {% if estado %}
+  <ul class="lista">
+    {% for e in estado %}
+    <li style="display:block">
+      <div style="display:flex;justify-content:space-between"><span>{{ e.categoria }}</span>
+        <span class="monto">{{ e.gastado|clp }} <span class="muted">/ {{ e.limite|clp }}</span></span></div>
+      <div class="barra-prog"><div class="{{ e.estado }}" style="width:{% if e.porcentaje > 100 %}100{% else %}{{ e.porcentaje }}{% endif %}%"></div></div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<div class="vacio">Define un límite por categoría y SENA te avisa cuando vayas en el 80% y cuando te pases.</div>{% endif %}
+</div>
+<div class="card">
+  <h2>Nuevo presupuesto</h2>
+  <form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn">Guardar</button></form>
+</div>
+{% if presupuestos %}
+<div class="card">
+  <h2>Tus límites</h2>
+  <ul class="lista">
+    {% for p in presupuestos %}
+    <li><a href="{% url 'presupuesto_editar' p.pk %}" style="color:inherit;flex:1">{{ p.categoria }} · <span class="monto">{{ p.monto_mensual|clp }}</span></a>
+      <form method="post" action="{% url 'presupuesto_borrar' p.pk %}" style="margin:0">{% csrf_token %}<button class="btn peligro">Eliminar</button></form></li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endblock %}

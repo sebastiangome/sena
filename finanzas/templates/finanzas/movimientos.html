@@ -1,0 +1,28 @@
+{% extends "base.html" %}{% load clp %}
+{% block titulo %}Movimientos{% endblock %}
+{% block contenido %}
+<div class="mesnav">
+  <a href="?anio={{ anterior.anio }}&mes={{ anterior.mes }}" aria-label="Mes anterior">‹</a>
+  <h1 style="margin:0">{{ nombre_mes }}</h1>
+  <a href="?anio={{ siguiente.anio }}&mes={{ siguiente.mes }}" aria-label="Mes siguiente">›</a>
+</div>
+<div class="acciones">
+  <a class="btn" href="{% url 'movimiento_nuevo' %}?tipo=gasto">+ Gasto</a>
+  <a class="btn sec" href="{% url 'movimiento_nuevo' %}?tipo=ingreso">+ Ingreso</a>
+</div>
+<div class="card">
+  {% if movimientos %}
+  <ul class="lista">
+    {% for m in movimientos %}
+    <li>
+      <a href="{% url 'movimiento_editar' m.pk %}" style="color:inherit;flex:1">{{ m.categoria }}
+        <div class="muted">{{ m.fecha|date:"d M Y" }} · {{ m.get_cuenta_display }}{% if m.descripcion %} · {{ m.descripcion }}{% endif %}</div></a>
+      <span class="monto {{ m.tipo }}">{% if m.tipo == "gasto" %}−{% else %}+{% endif %}{{ m.monto|clp }}</span>
+      <form method="post" action="{% url 'movimiento_borrar' m.pk %}" onsubmit="return confirm('¿Eliminar este movimiento?')" style="margin:0">
+        {% csrf_token %}<button class="btn peligro" aria-label="Eliminar">✕</button></form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<div class="vacio">No hay movimientos en este mes.</div>{% endif %}
+</div>
+{% endblock %}

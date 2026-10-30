@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block titulo %}Categorías{% endblock %}
+{% block contenido %}
+<h1>Categorías</h1>
+<div class="card">
+  <h2>Nueva categoría</h2>
+  <form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn">Agregar</button></form>
+</div>
+{% regroup categorias by get_tipo_display as grupos %}
+{% for g in grupos %}
+<div class="card">
+  <h2>{{ g.grouper }}s</h2>
+  <ul class="lista">
+    {% for c in g.list %}
+    <li>{{ c.nombre }}
+      <form method="post" action="{% url 'categoria_borrar' c.pk %}" onsubmit="return confirm('¿Eliminar {{ c.nombre|escapejs }}?')" style="margin:0">
+        {% csrf_token %}<button class="btn peligro">Eliminar</button></form></li>
+    {% endfor %}
+  </ul>
+</div>
+{% endfor %}
+{% endblock %}

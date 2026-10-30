@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block titulo %}Ingresar{% endblock %}
+{% block contenido %}
+<div class="auth">
+  <h1>Ingresar a SENA</h1>
+  <p class="muted">Sistema para Estudiantes: Navegación y Ahorro</p>
+  <div class="card">
+    <form method="post">{% csrf_token %}
+      {% if form.non_field_errors %}<div class="msg error">Usuario o contraseña incorrectos.</div>{% endif %}
+      {{ form.username.label_tag }} {{ form.username }}<br><br>
+      {{ form.password.label_tag }} {{ form.password }}<br><br>
+      <button class="btn" style="width:100%">Ingresar</button>
+    </form>
+  </div>
+  <p class="muted"><a href="{% url 'password_reset_request' %}">¿Olvidaste tu contraseña?</a></p>
+  <p class="muted">¿No tienes cuenta? <a href="{% url 'registro' %}">Regístrate</a></p>
+</div>
+{% endblock %}
