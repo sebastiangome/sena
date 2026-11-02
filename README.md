@@ -2,19 +2,37 @@
 
 App web para registrar ingresos y gastos, ver un resumen mensual, recibir alertas de presupuesto y simular compras por cuotas con metas. Multiusuario: cada persona ve solo sus datos.
 
-## Correr en tu computador
+## Iniciar el proyecto (doble clic)
+
+**La forma más fácil:** doble clic en `iniciar.bat` y abre [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+No se necesita ingresar ninguna contraseña en la terminal. Para entrar a la app, usa la cuenta que ya tienes registrada o crea una nueva en `/registro/`.
+
+---
+
+## Iniciar manualmente (terminal)
 
 ```bash
+# Solo la primera vez, si no tienes el entorno virtual creado:
 python -m venv venv
-venv\Scripts\activate          # Windows  (en Mac/Linux: source venv/bin/activate)
+venv\Scripts\activate
 pip install -r requirements.txt
+
+# Siempre que quieras encender el proyecto:
+venv\Scripts\activate
 python manage.py migrate
-python manage.py createsuperuser   # opcional, para entrar a /admin
 python manage.py runserver
 ```
 
-Abre http://127.0.0.1:8000, crea una cuenta y listo. Para probar desde el celular en la misma red WiFi:
+Abre [http://127.0.0.1:8000](http://127.0.0.1:8000) e inicia sesión con tu cuenta existente o regístrate.
+
+> **No ejecutes** `createsuperuser` a menos que quieras acceso al panel de administración `/admin/`.  
+> Ese comando pide contraseña y **no es necesario** para usar la aplicación.
+
+Para probar desde el celular en la misma red WiFi:
 `python manage.py runserver 0.0.0.0:8000` y agrega la IP de tu PC en `DJANGO_ALLOWED_HOSTS`.
+
+---
 
 ## Recuperación de contraseña por correo
 
@@ -23,18 +41,19 @@ En desarrollo, Django muestra el código de recuperación en la consola donde co
 ## Tests
 
 ```bash
+venv\Scripts\activate
 python manage.py test finanzas
 ```
 
-Cubren cálculos del resumen, alertas, formato de pesos y, sobre todo, que un usuario no pueda ver, editar ni borrar datos de otro.
+Cubren cálculos del resumen, alertas, formato de pesos, perfil, metas con cuotas y, sobre todo, que un usuario no pueda ver, editar ni borrar datos de otro.
 
 ## Estructura
 
-- `finanzas/models.py` — Categoria, Movimiento, Presupuesto (todo ligado a un usuario).
-- `finanzas/servicios.py` — cálculos (resumen del mes, gastos por categoría, estado de presupuestos y simulaciones de cuotas). El futuro chatbot usará estas funciones como herramientas.
-- `finanzas/models.py` — también contiene metas de compra y cuotas vinculadas a sus movimientos de gasto.
+- `finanzas/models.py` — Categoria, Movimiento, Presupuesto, MetaAhorro, CuotaMeta, Perfil, IngresoFijo (todo ligado a un usuario).
+- `finanzas/servicios.py` — cálculos (resumen del mes, gastos por categoría, estado de presupuestos, simulaciones de cuotas, cálculo "Tu mes"). El futuro chatbot usará estas funciones como herramientas.
 - `finanzas/views.py` — páginas; cada consulta filtra por `request.user`.
-- `finanzas/templates/` — HTML, diseñado primero para celular, con modo oscuro automático.
+- `finanzas/templates/` — HTML, diseñado primero para celular, con modo oscuro/claro/automático.
+- `iniciar.bat` — script de Windows para encender el proyecto sin escribir comandos.
 
 ## Antes de publicarla en internet
 

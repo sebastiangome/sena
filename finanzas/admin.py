@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Categoria, CuotaMeta, MetaAhorro, Movimiento, Presupuesto
+from .models import Categoria, CuotaMeta, IngresoFijo, MetaAhorro, Movimiento, Perfil, Presupuesto
 
 
 @admin.register(Movimiento)
@@ -13,3 +13,5 @@ admin.site.register(Categoria)
 admin.site.register(Presupuesto)
 admin.site.register(MetaAhorro)
 admin.site.register(CuotaMeta)
+admin.site.register(Perfil)
+admin.site.register(IngresoFijo)

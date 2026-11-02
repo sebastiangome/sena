@@ -9,7 +9,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 
 from django.db.models import Q, Sum
 
-from .models import CuotaMeta, MetaAhorro, Movimiento, Presupuesto
+from .models import CuotaMeta, IngresoFijo, MetaAhorro, Movimiento, Presupuesto
 
 CUOTAS_PERMITIDAS = (1, 3, 6, 12, 24)
 AVISO_SIMULACION = (
@@ -189,13 +189,13 @@ def resumen_cuotas(usuario, hoy=None):
     mes_inicio = date(hoy.year, hoy.month, 1)
     mes_fin = date(hoy.year, hoy.month, calendar.monthrange(hoy.year, hoy.month)[1])
     cuotas_activas = CuotaMeta.objects.filter(
-        meta__usuario=usuario, meta__estado="comprada"
+        meta__usuario=usuario, meta__estado="comprada", estado="pendiente"
     )
     return {
-        "este_mes": cuotas_activas.filter(fecha__range=(mes_inicio, mes_fin)).aggregate(
+        "este_mes": cuotas_activas.filter(fecha_vencimiento__range=(mes_inicio, mes_fin)).aggregate(
             total=Sum("monto")
         )["total"] or 0,
-        "deuda_pendiente": cuotas_activas.filter(fecha__gt=hoy).aggregate(
+        "deuda_pendiente": cuotas_activas.aggregate(
             total=Sum("monto")
         )["total"] or 0,
     }
@@ -204,13 +204,109 @@ def resumen_cuotas(usuario, hoy=None):
 def progreso_meta(meta, hoy=None):
     hoy = hoy or date.today()
     cuotas = meta.cuotas_programadas.all()
-    pagadas = cuotas.filter(fecha__lte=hoy).aggregate(total=Sum("monto"))["total"] or 0
-    pendientes = cuotas.filter(fecha__gt=hoy).aggregate(total=Sum("monto"))["total"] or 0
+    pagadas_qs = cuotas.filter(estado="pagada")
+    pendientes_qs = cuotas.filter(estado="pendiente")
+    pagadas = pagadas_qs.aggregate(total=Sum("monto"))["total"] or 0
+    pendientes = pendientes_qs.aggregate(total=Sum("monto"))["total"] or 0
     return {
         "cuotas": cuotas,
-        "pagadas": cuotas.filter(fecha__lte=hoy).count(),
-        "pendientes": cuotas.filter(fecha__gt=hoy).count(),
+        "pagadas": pagadas_qs.count(),
+        "pendientes": pendientes_qs.count(),
         "monto_pagado": pagadas,
         "deuda_restante": pendientes,
         "porcentaje": round(pagadas * 100 / meta.total_pagar) if meta.total_pagar else 0,
+    }
+
+
+# ==========================================
+# CÁLCULOS DE "TU MES" (REQUERIMIENTO 6)
+# ==========================================
+
+def ingreso_esperado_mes(usuario, hoy=None):
+    """Suma los ingresos fijos del perfil. Si no tiene, usa el promedio de ingresos de los últimos 3 meses."""
+    ingresos_fijos = usuario.ingresos_fijos.all()
+    if ingresos_fijos.exists():
+        total = ingresos_fijos.aggregate(t=Sum("monto"))["t"] or 0
+        return {"monto": total, "es_promedio": False}
+    prom = promedio_financiero(usuario, hoy)
+    return {"monto": round(prom["ingresos"]), "es_promedio": True}
+
+
+def cuotas_del_mes(usuario, hoy=None):
+    """Suma de las cuotas pendientes que vencen este mes."""
+    hoy = hoy or date.today()
+    mes_inicio = date(hoy.year, hoy.month, 1)
+    mes_fin = date(hoy.year, hoy.month, calendar.monthrange(hoy.year, hoy.month)[1])
+    return CuotaMeta.objects.filter(
+        meta__usuario=usuario,
+        meta__estado="comprada",
+        estado="pendiente",
+        fecha_vencimiento__range=(mes_inicio, mes_fin),
+    ).aggregate(total=Sum("monto"))["total"] or 0
+
+
+def deuda_total_pendiente(usuario, hoy=None):
+    """Suma de todas las cuotas pendientes, con detalle por meta."""
+    cuotas_pendientes = CuotaMeta.objects.filter(
+        meta__usuario=usuario,
+        meta__estado="comprada",
+        estado="pendiente",
+    )
+    total = cuotas_pendientes.aggregate(t=Sum("monto"))["t"] or 0
+    por_meta = []
+    metas = MetaAhorro.objects.filter(usuario=usuario, estado="comprada")
+    for m in metas:
+        cp = m.cuotas_programadas.filter(estado="pendiente")
+        t = cp.aggregate(t=Sum("monto"))["t"] or 0
+        if t > 0:
+            por_meta.append({
+                "meta": m.nombre,
+                "meta_id": m.id,
+                "total": t,
+                "cuotas_count": cp.count(),
+            })
+    return {"total": total, "por_meta": por_meta}
+
+
+def gasto_habitual(usuario, hoy=None):
+    """Promedio mensual de gastos de los últimos 3 meses, sin contar la categoría 'Cuotas'."""
+    hoy = hoy or date.today()
+    primer_mes = hoy.month - 2
+    anio_inicio = hoy.year + (primer_mes - 1) // 12
+    mes_inicio = (primer_mes - 1) % 12 + 1
+    desde = date(anio_inicio, mes_inicio, 1)
+    total = Movimiento.objects.filter(
+        usuario=usuario,
+        tipo="gasto",
+        fecha__range=(desde, hoy),
+    ).exclude(categoria__nombre="Cuotas").aggregate(t=Sum("monto"))["t"] or 0
+    return round(Decimal(total) / 3)
+
+
+def calculo_tu_mes(usuario, hoy=None):
+    """Calcula el disponible para ahorrar y resumen de 'Tu mes'."""
+    ingreso_info = ingreso_esperado_mes(usuario, hoy)
+    ingreso_esperado = ingreso_info["monto"]
+    cuotas_mes = cuotas_del_mes(usuario, hoy)
+    deuda = deuda_total_pendiente(usuario, hoy)
+    habitual = gasto_habitual(usuario, hoy)
+
+    disponible = ingreso_esperado - cuotas_mes - habitual
+
+    if ingreso_esperado > 0:
+        porcentaje_ahorro = round(disponible * 100 / ingreso_esperado)
+    else:
+        porcentaje_ahorro = None
+
+    return {
+        "ingreso_esperado": ingreso_esperado,
+        "es_promedio": ingreso_info["es_promedio"],
+        "cuotas_mes": cuotas_mes,
+        "deuda_pendiente": deuda["total"],
+        "deuda_por_meta": deuda["por_meta"],
+        "gasto_habitual": habitual,
+        "disponible_ahorro": disponible,
+        "porcentaje_ahorro": porcentaje_ahorro,
+        "alerta_negativo": disponible < 0,
+        "sin_ingresos": ingreso_esperado == 0,
     }

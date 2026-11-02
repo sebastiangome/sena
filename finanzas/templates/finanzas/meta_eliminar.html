@@ -1,0 +1,35 @@
+{% extends "base.html" %}{% load clp %}
+{% block titulo %}Eliminar meta{% endblock %}
+{% block contenido %}
+<h1>Eliminar meta</h1>
+<div class="card">
+  <h2>¿Estás seguro de que deseas eliminar la meta «{{ meta.nombre }}»?</h2>
+  <p class="muted">Precio: {{ meta.precio|clp }} · Estado actual: {{ meta.get_estado_display }}</p>
+
+  {% if tiene_pagadas %}
+  <div class="alerta cerca">
+    Esta meta tiene <strong>{{ cuotas_pagadas_count }}</strong> cuota{{ cuotas_pagadas_count|pluralize }} pagada{{ cuotas_pagadas_count|pluralize }} por un total de <strong>{{ monto_pagado|clp }}</strong>.
+  </div>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    {% if tiene_pagadas %}
+    <p style="margin:14px 0">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+        <input type="checkbox" name="borrar_movimientos" value="1" style="width:auto">
+        <span>Borrar también los movimientos de gasto ya pagados (por defecto NO se borran)</span>
+      </label>
+    </p>
+    {% endif %}
+    <p class="muted" style="font-size:0.85rem">
+      Las cuotas pendientes se eliminarán por completo. Esta acción no se puede deshacer.
+    </p>
+    <div class="acciones" style="margin-top:16px">
+      <button class="btn peligro" style="padding:10px 16px;font-size:0.95rem">Eliminar meta</button>
+      <a class="btn sec" href="{% url 'meta_detalle' meta.pk %}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+

@@ -4,7 +4,7 @@ from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 
-from .models import Categoria, MetaAhorro, Movimiento, Presupuesto
+from .models import Categoria, IngresoFijo, MetaAhorro, Movimiento, Presupuesto
 from .servicios import CUOTAS_PERMITIDAS
 
 
@@ -54,10 +54,98 @@ class CodigoRecuperacionForm(forms.Form):
         return datos
 
 
+class CambiarEmailForm(forms.Form):
+    email = forms.EmailField(label="Nuevo correo electrónico", required=True)
+    password = forms.CharField(
+        label="Contraseña actual",
+        widget=forms.PasswordInput(attrs={"autocomplete": "current-password"}),
+        required=True,
+    )
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.user = user
+
+    def clean_email(self):
+        email = self.cleaned_data.get("email", "").strip()
+        if self.user and User.objects.filter(email__iexact=email).exclude(pk=self.user.pk).exists():
+            raise forms.ValidationError("Este correo ya está en uso por otra cuenta.")
+        return email
+
+    def clean_password(self):
+        password = self.cleaned_data.get("password")
+        if self.user and not self.user.check_password(password):
+            raise forms.ValidationError("La contraseña actual es incorrecta.")
+        return password
+
+
+class IngresoFijoForm(forms.ModelForm):
+    nombre = forms.CharField(
+        label="Nombre del ingreso",
+        max_length=80,
+        required=True,
+        widget=forms.TextInput(attrs={"placeholder": "Ej: Quincena, Beca..."}),
+    )
+    monto = forms.IntegerField(
+        label="Monto mensual",
+        min_value=1,
+        required=True,
+        widget=forms.NumberInput(attrs={"placeholder": "Monto en pesos"}),
+    )
+    dia_mes = forms.IntegerField(
+        label="Día del mes (1 a 31)",
+        min_value=1,
+        max_value=31,
+        required=True,
+        widget=forms.NumberInput(attrs={"min": 1, "max": 31, "placeholder": "Ej: 15"}),
+    )
+
+    class Meta:
+        model = IngresoFijo
+        fields = ["nombre", "monto", "dia_mes"]
+
+    def clean_nombre(self):
+        nombre = self.cleaned_data.get("nombre", "").strip()
+        if not nombre:
+            raise forms.ValidationError("El nombre no puede estar vacío ni contener solo espacios.")
+        return nombre
+
+    def clean_monto(self):
+        monto = self.cleaned_data.get("monto")
+        if monto is None or monto <= 0:
+            raise forms.ValidationError("El monto debe ser mayor a 0.")
+        return monto
+
+
 class MetaAhorroForm(forms.ModelForm):
+    nombre = forms.CharField(
+        label="¿Qué quieres comprar?",
+        max_length=80,
+        required=True,
+        widget=forms.TextInput(attrs={"placeholder": "Ej: Bicicleta, Notebook..."}),
+    )
+    precio = forms.IntegerField(
+        label="Precio",
+        min_value=1,
+        required=True,
+        widget=forms.NumberInput(attrs={"placeholder": "Precio en pesos"}),
+    )
+
     class Meta:
         model = MetaAhorro
         fields = ["nombre", "precio"]
+
+    def clean_nombre(self):
+        nombre = self.cleaned_data.get("nombre", "").strip()
+        if not nombre:
+            raise forms.ValidationError("El nombre no puede estar vacío ni contener solo espacios.")
+        return nombre
+
+    def clean_precio(self):
+        precio = self.cleaned_data.get("precio")
+        if precio is None or precio <= 0:
+            raise forms.ValidationError("El precio debe ser mayor a 0.")
+        return precio
 
 
 class SimulacionMetaForm(forms.Form):
@@ -90,6 +178,23 @@ class ConfirmarCompraMetaForm(SimulacionMetaForm):
         return cuotas
 
 
+class PagarCuotaForm(forms.Form):
+    fecha_pago = forms.DateField(
+        label="Fecha de pago",
+        initial=date.today,
+        widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+    )
+    monto = forms.IntegerField(
+        label="Monto de la cuota",
+        min_value=1,
+    )
+    cuenta = forms.ChoiceField(
+        label="Cuenta de pago",
+        choices=[("banco", "Banco"), ("efectivo", "Efectivo")],
+        initial="banco",
+    )
+
+
 class MovimientoForm(forms.ModelForm):
     class Meta:
         model = Movimiento
@@ -98,7 +203,6 @@ class MovimientoForm(forms.ModelForm):
 
     def __init__(self, *args, usuario, **kwargs):
         super().__init__(*args, **kwargs)
-        # Solo las categorías del usuario: impide asignar categorías ajenas aunque manipulen el HTML
         self.fields["categoria"].queryset = Categoria.objects.filter(usuario=usuario)
         self.fields["categoria"].empty_label = "Elige una categoría"
 

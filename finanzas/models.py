@@ -1,6 +1,10 @@
+from datetime import date
+
 from django.conf import settings
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 
 CATEGORIAS_INICIALES = {
     "gasto": ["Comida", "Transporte", "Universidad", "Ocio", "Hogar", "Salud", "Otros"],
@@ -66,7 +70,7 @@ class MetaAhorro(models.Model):
     ESTADOS = [
         ("simulacion", "Simulación"),
         ("comprada", "Comprada"),
-        ("anulada", "Anulada"),
+        ("pagada", "Pagada"),
     ]
 
     usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="metas")
@@ -89,19 +93,37 @@ class MetaAhorro(models.Model):
 
 
 class CuotaMeta(models.Model):
+    ESTADOS = [
+        ("pendiente", "Pendiente"),
+        ("pagada", "Pagada"),
+    ]
+
     meta = models.ForeignKey(MetaAhorro, on_delete=models.CASCADE, related_name="cuotas_programadas")
     movimiento = models.OneToOneField(
-        Movimiento, on_delete=models.CASCADE, related_name="cuota_meta"
+        Movimiento, on_delete=models.SET_NULL, null=True, blank=True, related_name="cuota_meta"
     )
     numero = models.PositiveSmallIntegerField()
-    fecha = models.DateField()
+    fecha_vencimiento = models.DateField("fecha de vencimiento")
+    fecha_pago = models.DateField("fecha de pago", null=True, blank=True)
+    estado = models.CharField(max_length=10, choices=ESTADOS, default="pendiente")
     monto = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 
     class Meta:
-        ordering = ["fecha", "numero"]
+        ordering = ["fecha_vencimiento", "numero"]
         constraints = [
             models.UniqueConstraint(fields=["meta", "numero"], name="cuota_unica_por_meta")
         ]
+
+    def __str__(self):
+        return f"{self.meta.nombre} - cuota {self.numero} ({self.get_estado_display()})"
+
+    @property
+    def fecha(self):
+        return self.fecha_vencimiento
+
+    @property
+    def esta_atrasada(self):
+        return self.estado == "pendiente" and self.fecha_vencimiento < date.today()
 
 
 class CodigoRecuperacion(models.Model):
@@ -113,6 +135,47 @@ class CodigoRecuperacion(models.Model):
     codigo_hash = models.CharField(max_length=128)
     creado = models.DateTimeField(auto_now=True)
     intentos = models.PositiveSmallIntegerField(default=0)
+
+
+class Perfil(models.Model):
+    TEMAS = [
+        ("auto", "Automático"),
+        ("light", "Claro"),
+        ("dark", "Oscuro"),
+    ]
+
+    usuario = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="perfil"
+    )
+    tema = models.CharField(max_length=10, choices=TEMAS, default="auto")
+
+    def __str__(self):
+        return f"Perfil de {self.usuario.username} ({self.get_tema_display()})"
+
+
+class IngresoFijo(models.Model):
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="ingresos_fijos"
+    )
+    nombre = models.CharField(max_length=80)
+    monto = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    dia_mes = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(31)],
+        help_text="Día del mes (1 a 31)",
+    )
+    creado = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["dia_mes", "nombre"]
+
+    def __str__(self):
+        return f"{self.nombre}: ${self.monto} (día {self.dia_mes})"
+
+
+@receiver(post_save, sender=settings.AUTH_USER_MODEL)
+def asegurar_perfil_usuario(sender, instance, created, **kwargs):
+    if created:
+        Perfil.objects.get_or_create(usuario=instance)
 
 
 def crear_categorias_iniciales(usuario):

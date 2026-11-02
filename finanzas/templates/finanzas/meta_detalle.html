@@ -5,7 +5,12 @@
 <div class="card">
   <div class="muted">Precio</div>
   <div class="valor ingreso">{{ meta.precio|clp }}</div>
-  <div class="muted">Estado: {{ meta.get_estado_display }}</div>
+  <div class="muted" style="margin-top:4px">
+    Estado: <strong>{{ meta.get_estado_display }}</strong>
+    {% if meta.estado == "pagada" %}
+    <span class="ingreso">✓ Completada</span>
+    {% endif %}
+  </div>
 </div>
 
 {% if meta.estado == "simulacion" %}
@@ -48,36 +53,87 @@
   <p class="muted">{{ simulacion.aviso }}</p>
 </div>
 {% endif %}
-<form method="post" action="{% url 'meta_cancelar' meta.pk %}" onsubmit="return confirm('¿Eliminar esta meta?')" style="margin-bottom:14px">
-  {% csrf_token %}<button class="btn peligro">Eliminar meta</button>
-</form>
+
+<div style="margin-bottom:14px">
+  <a class="btn peligro" href="{% url 'meta_eliminar' meta.pk %}">Eliminar meta</a>
+</div>
+
 {% else %}
 <div class="card">
-  <h2>Compra</h2>
-  <p>{{ meta.cuotas }} cuotas de {{ meta.valor_cuota|clp }} · Total {{ meta.total_pagar|clp }} · Interés mensual {{ meta.tasa_mensual }}%</p>
+  <h2>Detalle de la compra</h2>
+  <p>{{ meta.cuotas }} cuotas de {{ meta.valor_cuota|clp }} · Total: {{ meta.total_pagar|clp }} · Interés mensual: {{ meta.tasa_mensual }}%</p>
   <p>Primera cuota: {{ meta.fecha_primera_cuota|date:"d/m/Y" }} · Compra registrada: {{ meta.fecha_compra|date:"d/m/Y" }}</p>
   <p>{{ progreso.pagadas }} cuotas pagadas · {{ progreso.pendientes }} pendientes</p>
   <div class="barra-prog"><div style="width:{% if progreso.porcentaje > 100 %}100{% else %}{{ progreso.porcentaje }}{% endif %}%"></div></div>
-  <p>Pagado: {{ progreso.monto_pagado|clp }} · Deuda restante: {{ progreso.deuda_restante|clp }}</p>
+  <p style="margin-top:8px">Pagado: {{ progreso.monto_pagado|clp }} · Deuda restante: {{ progreso.deuda_restante|clp }}</p>
 </div>
+
 <div class="card">
-  <h2>Cuotas</h2>
+  <h2>Cuotas programadas</h2>
   {% if progreso.cuotas %}
   <ul class="lista">
     {% for cuota in progreso.cuotas %}
-    <li>
-      <span>Cuota {{ cuota.numero }}/{{ meta.cuotas }} · {{ cuota.fecha|date:"d/m/Y" }}</span>
-      <span class="monto">{{ cuota.monto|clp }} <span class="muted">{% if cuota.fecha <= hoy %}Pagada{% else %}Pendiente{% endif %}</span></span>
+    <li style="display:block;padding:12px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div>
+          <strong>Cuota {{ cuota.numero }}/{{ meta.cuotas }}</strong>
+          <div class="muted">Vence: {{ cuota.fecha_vencimiento|date:"d/m/Y" }}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="monto">{{ cuota.monto|clp }}</div>
+          {% if cuota.estado == "pagada" %}
+            <span class="ingreso" style="font-size:0.85rem;font-weight:600">✓ Pagada ({{ cuota.fecha_pago|date:"d/m/Y" }})</span>
+          {% elif cuota.esta_atrasada %}
+            <span class="gasto" style="font-size:0.85rem;font-weight:700">Atrasada</span>
+          {% else %}
+            <span class="muted" style="font-size:0.85rem">Pendiente</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        {% if cuota.estado == "pagada" %}
+          <form method="post" action="{% url 'cuota_deshacer' cuota.pk %}" style="margin:0">
+            {% csrf_token %}
+            <button class="btn sec" style="padding:4px 8px;font-size:0.8rem">Deshacer pago</button>
+          </form>
+        {% else %}
+          <details style="width:100%">
+            <summary class="btn sec" style="padding:4px 10px;font-size:0.82rem;display:inline-block;cursor:pointer">Marcar como pagada</summary>
+            <form method="post" action="{% url 'cuota_pagar' cuota.pk %}" style="margin-top:10px;padding:12px;background:var(--bg);border-radius:10px;border:1px solid var(--line)">
+              {% csrf_token %}
+              <p>
+                <label>Fecha de pago</label>
+                <input type="date" name="fecha_pago" value="{{ hoy|date:'Y-m-d' }}" required>
+              </p>
+              <p>
+                <label>Monto</label>
+                <input type="number" name="monto" value="{{ cuota.monto }}" min="1" required>
+              </p>
+              <p>
+                <label>Cuenta</label>
+                <select name="cuenta">
+                  <option value="banco" selected>Banco</option>
+                  <option value="efectivo">Efectivo</option>
+                </select>
+              </p>
+              <button class="btn" style="padding:6px 14px;font-size:0.88rem">Confirmar pago</button>
+            </form>
+          </details>
+        {% endif %}
+      </div>
     </li>
     {% endfor %}
   </ul>
-  {% else %}<div class="vacio">No quedan cuotas registradas.</div>{% endif %}
+  {% else %}
+  <div class="vacio">No quedan cuotas registradas.</div>
+  {% endif %}
 </div>
-{% if meta.estado == "comprada" %}
-<form method="post" action="{% url 'meta_cancelar' meta.pk %}" onsubmit="return confirm('Se borrarán las cuotas futuras; las ya pagadas permanecerán. ¿Anular compra?')" style="margin-bottom:14px">
-  {% csrf_token %}<button class="btn peligro">Anular compra</button>
-</form>
-{% endif %}
+
+<div style="margin-bottom:14px">
+  <a class="btn peligro" href="{% url 'meta_eliminar' meta.pk %}">Eliminar meta</a>
+</div>
+
 {% endif %}
 <p><a href="{% url 'metas' %}">← Volver a Metas</a></p>
 {% endblock %}

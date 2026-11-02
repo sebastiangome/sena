@@ -1,6 +1,8 @@
 from datetime import date, timedelta
+from decimal import Decimal
 import re
 
+from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
 from django.core import mail
 from django.test import TestCase, override_settings
@@ -8,12 +10,15 @@ from django.urls import reverse
 from django.utils import timezone
 
 from . import servicios
+from .forms import MetaAhorroForm
 from .models import (
     Categoria,
     CodigoRecuperacion,
     CuotaMeta,
+    IngresoFijo,
     MetaAhorro,
     Movimiento,
+    Perfil,
     Presupuesto,
     crear_categorias_iniciales,
 )
@@ -26,15 +31,22 @@ def cat(usuario, nombre, tipo="gasto"):
 
 class Base(TestCase):
     def setUp(self):
-        self.ana = User.objects.create_user("ana", password="clave-segura-123")
-        self.beto = User.objects.create_user("beto", password="clave-segura-123")
+        self.ana = User.objects.create_user("ana", email="ana@example.com", password="clave-segura-123")
+        self.beto = User.objects.create_user("beto", email="beto@example.com", password="clave-segura-123")
         crear_categorias_iniciales(self.ana)
         crear_categorias_iniciales(self.beto)
+        Perfil.objects.get_or_create(usuario=self.ana)
+        Perfil.objects.get_or_create(usuario=self.beto)
         self.hoy = date.today()
 
     def mov(self, usuario, tipo, monto, categoria, fecha=None):
-        return Movimiento.objects.create(usuario=usuario, tipo=tipo, monto=monto,
-                                         categoria=cat(usuario, categoria, tipo), fecha=fecha or self.hoy)
+        return Movimiento.objects.create(
+            usuario=usuario,
+            tipo=tipo,
+            monto=monto,
+            categoria=cat(usuario, categoria, tipo),
+            fecha=fecha or self.hoy,
+        )
 
 
 class CalculosTest(Base):
@@ -84,9 +96,9 @@ class CalculosTest(Base):
         Presupuesto.objects.create(usuario=self.ana, categoria=cat(self.ana, "Comida"), monto_mensual=100000)
         Presupuesto.objects.create(usuario=self.ana, categoria=cat(self.ana, "Ocio"), monto_mensual=20000)
         Presupuesto.objects.create(usuario=self.ana, categoria=cat(self.ana, "Transporte"), monto_mensual=50000)
-        self.mov(self.ana, "gasto", 85000, "Comida")   # 85% -> cerca
-        self.mov(self.ana, "gasto", 25000, "Ocio")     # 125% -> excedido
-        self.mov(self.ana, "gasto", 10000, "Transporte")  # 20% -> ok
+        self.mov(self.ana, "gasto", 85000, "Comida")
+        self.mov(self.ana, "gasto", 25000, "Ocio")
+        self.mov(self.ana, "gasto", 10000, "Transporte")
         r = servicios.resumen_mes(self.ana, self.hoy.year, self.hoy.month)
         estados = {a["categoria"]: a["estado"] for a in r["alertas"]}
         self.assertEqual(estados, {"Ocio": "excedido", "Comida": "cerca"})
@@ -117,7 +129,7 @@ class AislamientoTest(Base):
     def test_no_usa_categoria_ajena(self):
         r = self.client.post(reverse("movimiento_nuevo"),
                              {"tipo": "gasto", "monto": 500, "fecha": self.hoy, "categoria": cat(self.ana, "Comida").pk})
-        self.assertEqual(r.status_code, 200)  # formulario rechazado
+        self.assertEqual(r.status_code, 200)
         self.assertFalse(Movimiento.objects.filter(usuario=self.beto).exists())
 
     def test_no_borra_categoria_ni_presupuesto_ajeno(self):
@@ -128,20 +140,21 @@ class AislamientoTest(Base):
 
     def test_requiere_login(self):
         self.client.logout()
-        for nombre in ["dashboard", "movimientos", "categorias", "presupuestos", "movimiento_nuevo"]:
+        for nombre in ["dashboard", "movimientos", "categorias", "presupuestos", "movimiento_nuevo", "perfil"]:
             r = self.client.get(reverse(nombre))
             self.assertEqual(r.status_code, 302, nombre)
             self.assertIn(reverse("login"), r.url)
 
 
 class FlujoTest(Base):
-    def test_registro_crea_categorias_y_entra(self):
+    def test_registro_crea_categorias_perfil_y_entra(self):
         r = self.client.post(reverse("registro"), {"username": "seb", "email": "seb@example.com",
                                                     "password1": "UnaClave-Larga-99", "password2": "UnaClave-Larga-99"})
         self.assertRedirects(r, reverse("dashboard"))
         seb = User.objects.get(username="seb")
         self.assertTrue(Categoria.objects.filter(usuario=seb, nombre="Comida").exists())
-        self.assertNotEqual(seb.password, "UnaClave-Larga-99")  # guardada hasheada
+        self.assertTrue(Perfil.objects.filter(usuario=seb).exists())
+        self.assertNotEqual(seb.password, "UnaClave-Larga-99")
 
     def test_crear_movimiento_y_ver_paginas(self):
         self.client.login(username="ana", password="clave-segura-123")
@@ -149,7 +162,7 @@ class FlujoTest(Base):
                              {"tipo": "gasto", "cuenta": "banco", "monto": 4500, "fecha": self.hoy, "categoria": cat(self.ana, "Comida").pk, "descripcion": "Almuerzo"})
         self.assertRedirects(r, reverse("movimientos"))
         self.assertEqual(Movimiento.objects.get(usuario=self.ana).cuenta, "banco")
-        for nombre in ["dashboard", "movimientos", "categorias", "presupuestos"]:
+        for nombre in ["dashboard", "movimientos", "categorias", "presupuestos", "perfil"]:
             r = self.client.get(reverse(nombre))
             self.assertEqual(r.status_code, 200, nombre)
         self.assertContains(self.client.get(reverse("dashboard")), "$4.500")
@@ -230,6 +243,30 @@ class MetasFlujoTest(Base):
         datos.update(extra)
         return datos
 
+    def test_bug_creacion_metas_corregido(self):
+        # Etiquetas claras
+        form = MetaAhorroForm()
+        self.assertEqual(form.fields["nombre"].label, "¿Qué quieres comprar?")
+        self.assertEqual(form.fields["precio"].label, "Precio")
+
+        # Nombre vacío o solo espacios es rechazado
+        form_vacio = MetaAhorroForm(data={"nombre": "   ", "precio": 50000})
+        self.assertFalse(form_vacio.is_valid())
+        self.assertIn("nombre", form_vacio.errors)
+
+        # Precio <= 0 es rechazado
+        form_cero = MetaAhorroForm(data={"nombre": "Teclado", "precio": 0})
+        self.assertFalse(form_cero.is_valid())
+        self.assertIn("precio", form_cero.errors)
+
+        form_negativo = MetaAhorroForm(data={"nombre": "Teclado", "precio": -100})
+        self.assertFalse(form_negativo.is_valid())
+        self.assertIn("precio", form_negativo.errors)
+
+        # Formulario válido
+        form_valido = MetaAhorroForm(data={"nombre": "Teclado mecánico", "precio": 45000})
+        self.assertTrue(form_valido.is_valid())
+
     def test_rechaza_precio_cero_cuotas_no_permitidas_y_tasa_fuera_de_rango(self):
         respuesta = self.client.post(
             reverse("metas"), {"nombre": "Mouse", "precio": "0"}
@@ -264,75 +301,356 @@ class MetasFlujoTest(Base):
         self.meta.refresh_from_db()
         self.assertEqual(self.meta.estado, "simulacion")
 
-    def test_compra_en_seis_meses_y_envio_duplicado_no_duplica(self):
+    def test_comprar_no_crea_movimientos_y_cuotas_quedan_pendientes(self):
         url = reverse("meta_comprar", args=[self.meta.pk])
-        datos = self.datos_compra()
-        respuesta = self.client.post(url, datos)
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, "Confirmar compra")
-        datos["confirmar"] = "1"
-        self.assertEqual(self.client.post(url, datos).status_code, 302)
-        self.assertEqual(self.client.post(url, datos).status_code, 302)
-        cuotas = CuotaMeta.objects.filter(meta=self.meta).order_by("numero")
-        self.assertEqual(cuotas.count(), 6)
-        self.assertEqual(
-            len({(cuota.fecha.year, cuota.fecha.month) for cuota in cuotas}), 6
-        )
-        self.assertEqual(
-            Movimiento.objects.filter(
-                usuario=self.ana, categoria__nombre="Cuotas"
-            ).count(),
-            6,
-        )
+        datos = self.datos_compra(confirmar="1")
+        self.client.post(url, datos)
         self.meta.refresh_from_db()
         self.assertEqual(self.meta.estado, "comprada")
-        self.assertEqual(sum(cuota.monto for cuota in cuotas), self.meta.total_pagar)
+        cuotas = self.meta.cuotas_programadas.all()
+        self.assertEqual(cuotas.count(), 6)
+        for cuota in cuotas:
+            self.assertEqual(cuota.estado, "pendiente")
+            self.assertIsNone(cuota.movimiento)
+        # Comprar no crea movimientos
+        self.assertFalse(Movimiento.objects.filter(usuario=self.ana, categoria__nombre="Cuotas").exists())
 
-    def test_anular_compra_conserva_solo_cuotas_pagadas(self):
-        inicio = servicios.fecha_cuota(date(self.hoy.year, self.hoy.month, 1), -2)
-        datos = self.datos_compra(fecha_primera_cuota=inicio.isoformat(), confirmar="1")
-        self.client.post(reverse("meta_comprar", args=[self.meta.pk]), datos)
-        cuotas_pagadas = CuotaMeta.objects.filter(meta=self.meta, fecha__lte=self.hoy).count()
-        self.assertGreater(cuotas_pagadas, 0)
+    def test_marcar_cuota_pagada_crea_un_movimiento_doble_envio_no_duplica_y_deshacer_lo_borra(self):
+        # 1. Comprar
+        self.client.post(reverse("meta_comprar", args=[self.meta.pk]), self.datos_compra(confirmar="1"))
+        cuota1 = self.meta.cuotas_programadas.get(numero=1)
+        self.assertEqual(cuota1.estado, "pendiente")
 
-        respuesta = self.client.post(reverse("meta_cancelar", args=[self.meta.pk]))
+        # 2. Marcar como pagada
+        url_pagar = reverse("cuota_pagar", args=[cuota1.pk])
+        r1 = self.client.post(url_pagar, {
+            "fecha_pago": self.hoy.isoformat(),
+            "monto": cuota1.monto,
+            "cuenta": "banco",
+        })
+        self.assertEqual(r1.status_code, 302)
 
-        self.assertEqual(respuesta.status_code, 302)
-        self.meta.refresh_from_db()
-        self.assertEqual(self.meta.estado, "anulada")
-        self.assertEqual(CuotaMeta.objects.filter(meta=self.meta).count(), cuotas_pagadas)
-        self.assertFalse(CuotaMeta.objects.filter(meta=self.meta, fecha__gt=self.hoy).exists())
-        self.assertEqual(
-            Movimiento.objects.filter(usuario=self.ana, categoria__nombre="Cuotas").count(),
-            cuotas_pagadas,
-        )
+        cuota1.refresh_from_db()
+        self.assertEqual(cuota1.estado, "pagada")
+        self.assertIsNotNone(cuota1.movimiento)
+        self.assertEqual(Movimiento.objects.filter(usuario=self.ana, categoria__nombre="Cuotas").count(), 1)
+        mov = cuota1.movimiento
+        self.assertEqual(mov.monto, cuota1.monto)
+        self.assertEqual(mov.cuenta, "banco")
 
-    def test_no_accede_a_meta_ajena_para_ver_simular_comprar_o_borrar(self):
-        self.client.logout()
+        # 3. Doble envío no duplica
+        r2 = self.client.post(url_pagar, {
+            "fecha_pago": self.hoy.isoformat(),
+            "monto": cuota1.monto,
+            "cuenta": "banco",
+        })
+        self.assertEqual(r2.status_code, 302)
+        self.assertEqual(Movimiento.objects.filter(usuario=self.ana, categoria__nombre="Cuotas").count(), 1)
+
+        # 4. Deshacer el pago lo borra
+        url_deshacer = reverse("cuota_deshacer", args=[cuota1.pk])
+        r_deshacer = self.client.post(url_deshacer)
+        self.assertEqual(r_deshacer.status_code, 302)
+
+        cuota1.refresh_from_db()
+        self.assertEqual(cuota1.estado, "pendiente")
+        self.assertIsNone(cuota1.movimiento)
+        self.assertIsNone(cuota1.fecha_pago)
+        self.assertFalse(Movimiento.objects.filter(usuario=self.ana, categoria__nombre="Cuotas").exists())
+
+    def test_meta_pasa_a_pagada_al_pagar_ultima_cuota(self):
+        # Meta con 3 cuotas
+        meta3 = MetaAhorro.objects.create(usuario=self.ana, nombre="Audífonos", precio=30000)
+        datos = {"cuotas": "3", "tasa_mensual": "0", "fecha_primera_cuota": self.hoy.isoformat(), "confirmar": "1"}
+        self.client.post(reverse("meta_comprar", args=[meta3.pk]), datos)
+        meta3.refresh_from_db()
+        self.assertEqual(meta3.estado, "comprada")
+
+        cuotas = list(meta3.cuotas_programadas.order_by("numero"))
+        # Pagar cuota 1
+        self.client.post(reverse("cuota_pagar", args=[cuotas[0].pk]))
+        meta3.refresh_from_db()
+        self.assertEqual(meta3.estado, "comprada")
+
+        # Pagar cuota 2
+        self.client.post(reverse("cuota_pagar", args=[cuotas[1].pk]))
+        meta3.refresh_from_db()
+        self.assertEqual(meta3.estado, "comprada")
+
+        # Pagar cuota 3
+        self.client.post(reverse("cuota_pagar", args=[cuotas[2].pk]))
+        meta3.refresh_from_db()
+        self.assertEqual(meta3.estado, "pagada")
+
+        # Deshacer cuota 3 vuelve a "comprada"
+        self.client.post(reverse("cuota_deshacer", args=[cuotas[2].pk]))
+        meta3.refresh_from_db()
+        self.assertEqual(meta3.estado, "comprada")
+
+    def test_cuota_atrasada_muestra_rojo(self):
+        # Cuota con vencimiento anterior a hoy
+        ayer = self.hoy - timedelta(days=5)
+        self.client.post(reverse("meta_comprar", args=[self.meta.pk]), self.datos_compra(fecha_primera_cuota=ayer.isoformat(), confirmar="1"))
+        cuota1 = self.meta.cuotas_programadas.get(numero=1)
+        self.assertTrue(cuota1.esta_atrasada)
+        r = self.client.get(reverse("meta_detalle", args=[self.meta.pk]))
+        self.assertContains(r, "Atrasada")
+
+    def test_eliminar_meta_sin_borrar_gastos_pagados(self):
+        # Comprar y pagar una cuota
+        self.client.post(reverse("meta_comprar", args=[self.meta.pk]), self.datos_compra(confirmar="1"))
+        cuota1 = self.meta.cuotas_programadas.get(numero=1)
+        self.client.post(reverse("cuota_pagar", args=[cuota1.pk]))
+        self.assertEqual(Movimiento.objects.filter(usuario=self.ana, categoria__nombre="Cuotas").count(), 1)
+
+        # Eliminar sin borrar movimientos (por defecto)
+        r = self.client.post(reverse("meta_eliminar", args=[self.meta.pk]), {"borrar_movimientos": "0"})
+        self.assertEqual(r.status_code, 302)
+        self.assertFalse(MetaAhorro.objects.filter(pk=self.meta.pk).exists())
+        self.assertFalse(CuotaMeta.objects.filter(meta=self.meta).exists())
+        # El movimiento pagado se conserva
+        self.assertEqual(Movimiento.objects.filter(usuario=self.ana, categoria__nombre="Cuotas").count(), 1)
+
+    def test_eliminar_meta_con_borrado_de_gastos_pagados(self):
+        # Comprar y pagar una cuota
+        self.client.post(reverse("meta_comprar", args=[self.meta.pk]), self.datos_compra(confirmar="1"))
+        cuota1 = self.meta.cuotas_programadas.get(numero=1)
+        self.client.post(reverse("cuota_pagar", args=[cuota1.pk]))
+        self.assertEqual(Movimiento.objects.filter(usuario=self.ana, categoria__nombre="Cuotas").count(), 1)
+
+        # Eliminar borrando movimientos (borrar_movimientos=1)
+        r = self.client.post(reverse("meta_eliminar", args=[self.meta.pk]), {"borrar_movimientos": "1"})
+        self.assertEqual(r.status_code, 302)
+        self.assertFalse(MetaAhorro.objects.filter(pk=self.meta.pk).exists())
+        self.assertFalse(CuotaMeta.objects.filter(meta=self.meta).exists())
+        # El movimiento fue borrado
+        self.assertEqual(Movimiento.objects.filter(usuario=self.ana, categoria__nombre="Cuotas").count(), 0)
+
+
+class PerfilYMenuTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.ana)
+
+    def test_preferencia_tema_se_guarda_y_aparece_como_data_theme_en_html(self):
+        # Cambiar a oscuro
+        r = self.client.post(reverse("cambiar_tema"), {"tema": "dark"})
+        self.assertEqual(r.status_code, 302)
+        self.ana.perfil.refresh_from_db()
+        self.assertEqual(self.ana.perfil.tema, "dark")
+
+        resp = self.client.get(reverse("dashboard"))
+        self.assertContains(resp, 'data-theme="dark"')
+
+        # Cambiar a claro
+        self.client.post(reverse("cambiar_tema"), {"tema": "light"})
+        resp = self.client.get(reverse("dashboard"))
+        self.assertContains(resp, 'data-theme="light"')
+
+        # Cambiar a automático
+        self.client.post(reverse("cambiar_tema"), {"tema": "auto"})
+        resp = self.client.get(reverse("dashboard"))
+        self.assertContains(resp, 'data-theme="auto"')
+
+    def test_cambiar_correo_con_contrasena_incorrecta_falla(self):
+        r = self.client.post(reverse("perfil"), {
+            "accion": "cambiar_email",
+            "email": "nuevo@example.com",
+            "password": "clave-erronea-xyz",
+        })
+        self.assertEqual(r.status_code, 200)
+        self.ana.refresh_from_db()
+        self.assertEqual(self.ana.email, "ana@example.com")
+        self.assertContains(r, "La contraseña actual es incorrecta")
+
+    def test_cambiar_correo_con_correo_ya_usado_falla(self):
+        r = self.client.post(reverse("perfil"), {
+            "accion": "cambiar_email",
+            "email": "BETO@EXAMPLE.COM",  # mayúsculas/minúsculas
+            "password": "clave-segura-123",
+        })
+        self.assertEqual(r.status_code, 200)
+        self.ana.refresh_from_db()
+        self.assertEqual(self.ana.email, "ana@example.com")
+        self.assertContains(r, "Este correo ya está en uso")
+
+    def test_cambiar_correo_correcto_funciona(self):
+        r = self.client.post(reverse("perfil"), {
+            "accion": "cambiar_email",
+            "email": "nuevoana@example.com",
+            "password": "clave-segura-123",
+        })
+        self.assertRedirects(r, reverse("perfil"))
+        self.ana.refresh_from_db()
+        self.assertEqual(self.ana.email, "nuevoana@example.com")
+
+    def test_cambiar_contrasena_mantiene_sesion_y_antigua_deja_de_servir(self):
+        r = self.client.post(reverse("perfil"), {
+            "accion": "cambiar_password",
+            "old_password": "clave-segura-123",
+            "new_password1": "NuevaClave-Segura-456!",
+            "new_password2": "NuevaClave-Segura-456!",
+        })
+        self.assertRedirects(r, reverse("perfil"))
+        self.ana.refresh_from_db()
+        self.assertTrue(self.ana.check_password("NuevaClave-Segura-456!"))
+        self.assertFalse(self.ana.check_password("clave-segura-123"))
+
+        # Sesión sigue activa
+        resp = self.client.get(reverse("dashboard"))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_ingresos_fijos_crud_y_total_esperado(self):
+        # Crear Quincena $30.000 día 15
+        self.client.post(reverse("perfil"), {
+            "accion": "crear_ingreso",
+            "nombre": "Quincena",
+            "monto": "30000",
+            "dia_mes": "15",
+        })
+        # Crear Fin de mes $30.000 día 30
+        self.client.post(reverse("perfil"), {
+            "accion": "crear_ingreso",
+            "nombre": "Fin de mes",
+            "monto": "30000",
+            "dia_mes": "30",
+        })
+        self.assertEqual(IngresoFijo.objects.filter(usuario=self.ana).count(), 2)
+
+        r = self.client.get(reverse("perfil"))
+        self.assertContains(r, "Quincena")
+        self.assertContains(r, "Fin de mes")
+        self.assertContains(r, "$60.000")  # total mensual esperado
+
+        # Editar
+        quincena = IngresoFijo.objects.get(usuario=self.ana, nombre="Quincena")
+        self.client.post(reverse("ingreso_fijo_editar", args=[quincena.pk]), {
+            "nombre": "Quincena Actualizada",
+            "monto": "35000",
+            "dia_mes": "16",
+        })
+        quincena.refresh_from_db()
+        self.assertEqual(quincena.monto, 35000)
+
+        # Borrar
+        self.client.post(reverse("ingreso_fijo_borrar", args=[quincena.pk]))
+        self.assertFalse(IngresoFijo.objects.filter(pk=quincena.pk).exists())
+
+
+class TuMesServiciosTest(Base):
+    def test_tu_mes_con_ejemplo_30k_mas_30k_y_cuotas(self):
+        # Ingresos fijos: Quincena 30.000 + Fin de mes 30.000 = 60.000
+        IngresoFijo.objects.create(usuario=self.ana, nombre="Quincena", monto=30000, dia_mes=15)
+        IngresoFijo.objects.create(usuario=self.ana, nombre="Fin de mes", monto=30000, dia_mes=30)
+
+        # Gasto habitual: 3 meses con 28.000 c/u (sin contar Cuotas)
+        # Mes 1
+        d1 = servicios.fecha_cuota(self.hoy, -2)
+        Movimiento.objects.create(usuario=self.ana, tipo="gasto", monto=28000, categoria=cat(self.ana, "Comida"), fecha=d1)
+        # Mes 2
+        d2 = servicios.fecha_cuota(self.hoy, -1)
+        Movimiento.objects.create(usuario=self.ana, tipo="gasto", monto=28000, categoria=cat(self.ana, "Comida"), fecha=d2)
+        # Mes 3
+        Movimiento.objects.create(usuario=self.ana, tipo="gasto", monto=28000, categoria=cat(self.ana, "Comida"), fecha=self.hoy)
+
+        # Cuota de este mes: 20.000
+        cat_cuotas, _ = Categoria.objects.get_or_create(usuario=self.ana, nombre="Cuotas", tipo="gasto")
+        meta = MetaAhorro.objects.create(usuario=self.ana, nombre="Celular", precio=20000, estado="comprada")
+        CuotaMeta.objects.create(meta=meta, numero=1, fecha_vencimiento=self.hoy, monto=20000, estado="pendiente")
+
+        resultado = servicios.calculo_tu_mes(self.ana, self.hoy)
+        self.assertEqual(resultado["ingreso_esperado"], 60000)
+        self.assertFalse(resultado["es_promedio"])
+        self.assertEqual(resultado["cuotas_mes"], 20000)
+        self.assertEqual(resultado["gasto_habitual"], 28000)
+        # 60.000 - 20.000 - 28.000 = 12.000
+        self.assertEqual(resultado["disponible_ahorro"], 12000)
+        self.assertEqual(resultado["porcentaje_ahorro"], 20)
+        self.assertFalse(resultado["alerta_negativo"])
+
+    def test_tu_mes_sin_ingresos_no_divide_por_cero(self):
+        resultado = servicios.calculo_tu_mes(self.ana, self.hoy)
+        self.assertEqual(resultado["ingreso_esperado"], 0)
+        self.assertIsNone(resultado["porcentaje_ahorro"])
+        self.assertTrue(resultado["sin_ingresos"])
+
+    def test_tu_mes_con_resultado_negativo(self):
+        # Ingreso fijo 10.000
+        IngresoFijo.objects.create(usuario=self.ana, nombre="Ayuda", monto=10000, dia_mes=1)
+        # Cuotas 15.000
+        meta = MetaAhorro.objects.create(usuario=self.ana, nombre="Zapatos", precio=15000, estado="comprada")
+        CuotaMeta.objects.create(meta=meta, numero=1, fecha_vencimiento=self.hoy, monto=15000, estado="pendiente")
+
+        resultado = servicios.calculo_tu_mes(self.ana, self.hoy)
+        # 10.000 - 15.000 = -5.000
+        self.assertEqual(resultado["disponible_ahorro"], -5000)
+        self.assertTrue(resultado["alerta_negativo"])
+
+
+class SeguridadYAislamientoCompletoTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.meta_ana = MetaAhorro.objects.create(usuario=self.ana, nombre="Consola", precio=200000, estado="comprada")
+        self.cuota_ana = CuotaMeta.objects.create(meta=self.meta_ana, numero=1, fecha_vencimiento=self.hoy, monto=50000, estado="pendiente")
+        self.ingreso_ana = IngresoFijo.objects.create(usuario=self.ana, nombre="Mesada", monto=50000, dia_mes=5)
         self.client.force_login(self.beto)
-        detalle = reverse("meta_detalle", args=[self.meta.pk])
-        compra = reverse("meta_comprar", args=[self.meta.pk])
-        cancelar = reverse("meta_cancelar", args=[self.meta.pk])
-        self.assertEqual(self.client.get(detalle).status_code, 404)
-        self.assertEqual(
-            self.client.post(detalle, {"cuotas": "6", "tasa_mensual": "0"}).status_code,
-            404,
-        )
-        self.assertEqual(self.client.post(compra, self.datos_compra()).status_code, 404)
-        self.assertEqual(self.client.post(cancelar).status_code, 404)
-        self.meta.refresh_from_db()
-        self.assertEqual(self.meta.estado, "simulacion")
 
-    def test_cuotas_en_dashboard_y_pantalla_de_meta(self):
-        self.client.post(
-            reverse("meta_comprar", args=[self.meta.pk]),
-            self.datos_compra(confirmar="1"),
-        )
-        self.assertEqual(self.client.get(reverse("dashboard")).status_code, 200)
-        self.assertEqual(
-            self.client.get(reverse("meta_detalle", args=[self.meta.pk])).status_code,
-            200,
-        )
+    def test_usuario_no_accede_a_datos_ajenos_404(self):
+        # Metas ajenas
+        self.assertEqual(self.client.get(reverse("meta_detalle", args=[self.meta_ana.pk])).status_code, 404)
+        self.assertEqual(self.client.post(reverse("meta_comprar", args=[self.meta_ana.pk]), {"cuotas": 6}).status_code, 404)
+        self.assertEqual(self.client.post(reverse("meta_eliminar", args=[self.meta_ana.pk])).status_code, 404)
+
+        # Cuotas ajenas
+        self.assertEqual(self.client.post(reverse("cuota_pagar", args=[self.cuota_ana.pk])).status_code, 404)
+        self.assertEqual(self.client.post(reverse("cuota_deshacer", args=[self.cuota_ana.pk])).status_code, 404)
+
+        # Ingresos fijos ajenos
+        self.assertEqual(self.client.get(reverse("ingreso_fijo_editar", args=[self.ingreso_ana.pk])).status_code, 404)
+        self.assertEqual(self.client.post(reverse("ingreso_fijo_borrar", args=[self.ingreso_ana.pk])).status_code, 404)
+
+
+class MigracionDatosLogicaTest(Base):
+    def test_migracion_convierte_metas_compradas_y_anuladas(self):
+        # Simular datos antes de la migración:
+        # Meta 1: comprada con cuota pasada (con movimiento) y cuota futura (con movimiento)
+        cat_cuotas, _ = Categoria.objects.get_or_create(usuario=self.ana, nombre="Cuotas", tipo="gasto")
+        meta_comprada = MetaAhorro.objects.create(usuario=self.ana, nombre="Test Compra", precio=60000, estado="comprada")
+        pasada_mov = Movimiento.objects.create(usuario=self.ana, tipo="gasto", monto=30000, categoria=cat_cuotas, fecha=self.hoy - timedelta(days=10))
+        cuota_pasada = CuotaMeta.objects.create(meta=meta_comprada, numero=1, fecha_vencimiento=self.hoy - timedelta(days=10), monto=30000, movimiento=pasada_mov)
+
+        futura_mov = Movimiento.objects.create(usuario=self.ana, tipo="gasto", monto=30000, categoria=cat_cuotas, fecha=self.hoy + timedelta(days=20))
+        cuota_futura = CuotaMeta.objects.create(meta=meta_comprada, numero=2, fecha_vencimiento=self.hoy + timedelta(days=20), monto=30000, movimiento=futura_mov)
+
+        # Meta 2: simulada anulada
+        anulada_mov = Movimiento.objects.create(usuario=self.ana, tipo="gasto", monto=10000, categoria=cat_cuotas, fecha=self.hoy - timedelta(days=30))
+        meta_anulada = MetaAhorro.objects.create(usuario=self.ana, nombre="Test Anulada", precio=10000, estado="anulada")
+        cuota_anulada = CuotaMeta.objects.create(meta=meta_anulada, numero=1, fecha_vencimiento=self.hoy - timedelta(days=30), monto=10000, movimiento=anulada_mov)
+
+        # Ejecutar lógica de migración
+        import importlib
+        migracion = importlib.import_module("finanzas.migrations.0006_migracion_datos")
+        migrar_datos = migracion.migrar_datos
+        from django.apps import apps
+        migrar_datos(apps, None)
+
+        # Verificaciones meta comprada
+        cuota_pasada.refresh_from_db()
+        self.assertEqual(cuota_pasada.estado, "pagada")
+        self.assertEqual(cuota_pasada.fecha_pago, cuota_pasada.fecha_vencimiento)
+        self.assertIsNotNone(cuota_pasada.movimiento)
+
+        cuota_futura.refresh_from_db()
+        self.assertEqual(cuota_futura.estado, "pendiente")
+        self.assertIsNone(cuota_futura.fecha_pago)
+        self.assertIsNone(cuota_futura.movimiento)
+        # El movimiento futuro fue borrado
+        self.assertFalse(Movimiento.objects.filter(pk=futura_mov.pk).exists())
+
+        # Verificaciones meta anulada
+        self.assertFalse(MetaAhorro.objects.filter(pk=meta_anulada.pk).exists())
+        # Su movimiento pagado se conserva intacto
+        self.assertTrue(Movimiento.objects.filter(pk=anulada_mov.pk).exists())
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")

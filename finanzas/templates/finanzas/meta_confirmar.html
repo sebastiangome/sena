@@ -6,7 +6,7 @@
   <h2>{{ meta.nombre }}</h2>
   <p>Precio: {{ meta.precio|clp }}</p>
   <p>{{ plan.cuotas }} cuotas de {{ plan.valor_cuota|clp }} · Total: {{ plan.total_pagar|clp }} · Intereses: {{ plan.intereses|clp }}</p>
-  <p>Al confirmar se registrará un gasto por cada cuota y aparecerán en tus movimientos y presupuestos.</p>
+  <p>Al confirmar se programarán las cuotas como pendientes. Podrás marcarlas como pagadas a medida que las vayas cancelando.</p>
   <form method="post">{% csrf_token %}
     {{ form.as_p }}
     <input type="hidden" name="confirmar" value="1">

@@ -1,0 +1,69 @@
+{% extends "base.html" %}{% load clp %}
+{% block titulo %}Mi perfil{% endblock %}
+{% block contenido %}
+<h1>Mi perfil</h1>
+
+{% include "finanzas/tu_mes_card.html" %}
+
+<div class="card">
+  <h2>Ingresos fijos del mes</h2>
+  <p class="muted">Registra los ingresos regulares que recibes cada mes (ej: mesada, beca, sueldo) para proyectar tu ahorro.</p>
+
+  {% if ingresos_fijos %}
+  <ul class="lista" style="margin-bottom:14px">
+    {% for ing in ingresos_fijos %}
+    <li>
+      <div>
+        <strong>{{ ing.nombre }}</strong>
+        <div class="muted">Día {{ ing.dia_mes }} de cada mes</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="monto ingreso">{{ ing.monto|clp }}</span>
+        <a class="btn sec" href="{% url 'ingreso_fijo_editar' ing.pk %}" style="padding:4px 8px;font-size:0.82rem">Editar</a>
+        <form method="post" action="{% url 'ingreso_fijo_borrar' ing.pk %}" onsubmit="return confirm('¿Eliminar «{{ ing.nombre }}»?')" style="margin:0">
+          {% csrf_token %}
+          <button class="btn peligro" style="padding:4px 8px;font-size:0.82rem">Borrar</button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  <div style="padding-top:10px;border-top:1px solid var(--line);font-size:0.95rem">
+    <strong>Total mensual esperado:</strong> <span class="ingreso" style="font-weight:700">{{ total_esperado|clp }}</span>
+  </div>
+  {% else %}
+  <div class="vacio" style="padding:14px 0">No tienes ingresos fijos registrados aún.</div>
+  {% endif %}
+
+  <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+    <h3 style="font-size:0.95rem;margin:0 0 10px">Agregar ingreso fijo</h3>
+    <form method="post" action="{% url 'perfil' %}">
+      {% csrf_token %}
+      <input type="hidden" name="accion" value="crear_ingreso">
+      {{ form_ingreso.as_p }}
+      <button class="btn" style="padding:8px 14px">Agregar ingreso</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Cambiar correo electrónico</h2>
+  <form method="post" action="{% url 'perfil' %}">
+    {% csrf_token %}
+    <input type="hidden" name="accion" value="cambiar_email">
+    {{ form_email.as_p }}
+    <button class="btn sec">Actualizar correo</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Cambiar contraseña</h2>
+  <form method="post" action="{% url 'perfil' %}">
+    {% csrf_token %}
+    <input type="hidden" name="accion" value="cambiar_password">
+    {{ form_pass.as_p }}
+    <button class="btn sec">Actualizar contraseña</button>
+  </form>
+</div>
+{% endblock %}
+

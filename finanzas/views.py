@@ -3,22 +3,24 @@ import secrets
 
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth import login
-from django.contrib.auth.forms import SetPasswordForm
+from django.contrib.auth import login, update_session_auth_hash
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.forms import PasswordChangeForm, SetPasswordForm
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.models import User
 from django.core.mail import send_mail
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import ProtectedError, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from . import servicios
 from .forms import (
+    CambiarEmailForm,
     CategoriaForm,
     ConfirmarCompraMetaForm,
+    IngresoFijoForm,
     MetaAhorroForm,
     MovimientoForm,
     PresupuestoForm,
@@ -31,8 +33,10 @@ from .models import (
     Categoria,
     CodigoRecuperacion,
     CuotaMeta,
+    IngresoFijo,
     MetaAhorro,
     Movimiento,
+    Perfil,
     Presupuesto,
     crear_categorias_iniciales,
 )
@@ -64,6 +68,7 @@ def registro(request):
     if request.method == "POST" and form.is_valid():
         usuario = form.save()
         crear_categorias_iniciales(usuario)
+        Perfil.objects.get_or_create(usuario=usuario)
         login(request, usuario)
         messages.success(request, "¡Cuenta creada! Ya puedes registrar tus movimientos.")
         return redirect("dashboard")
@@ -153,6 +158,7 @@ def dashboard(request):
         "valores": [c["total"] for c in resumen["por_categoria"]],
     }
     ant, sig = _mes_vecino(anio, mes, -1), _mes_vecino(anio, mes, 1)
+    tu_mes = servicios.calculo_tu_mes(request.user)
     return render(request, "finanzas/dashboard.html", {
         "r": resumen,
         "saldos": servicios.saldos_por_cuenta(request.user),
@@ -162,6 +168,7 @@ def dashboard(request):
         "anterior": {"anio": ant[0], "mes": ant[1]},
         "siguiente": {"anio": sig[0], "mes": sig[1]},
         "ultimos": servicios.movimientos_del_mes(request.user, anio, mes).select_related("categoria")[:5],
+        "tu_mes": tu_mes,
     })
 
 
@@ -180,7 +187,6 @@ def movimientos(request):
 
 @login_required
 def movimiento_form(request, pk=None):
-    # get_object_or_404 con usuario=request.user: si el id es de otra persona responde 404
     instancia = get_object_or_404(Movimiento, pk=pk, usuario=request.user) if pk else None
     inicial = {"fecha": date.today(), "tipo": request.GET.get("tipo", "gasto")}
     form = MovimientoForm(request.POST or None, instance=instancia, initial=inicial, usuario=request.user)
@@ -311,14 +317,13 @@ def meta_detalle(request, pk):
 
 
 @login_required
-@require_POST
 def meta_comprar(request, pk):
     meta = get_object_or_404(MetaAhorro, pk=pk, usuario=request.user)
     if meta.estado != "simulacion":
         messages.error(request, "Esta meta ya no está disponible para compra.")
         return redirect("meta_detalle", pk=meta.pk)
-    formulario = ConfirmarCompraMetaForm(request.POST)
-    if not formulario.is_valid():
+    formulario = ConfirmarCompraMetaForm(request.POST or None)
+    if request.method != "POST" or not formulario.is_valid():
         messages.error(request, "Revisa los datos de la simulación e inténtalo nuevamente.")
         return redirect("meta_detalle", pk=meta.pk)
 
@@ -338,9 +343,6 @@ def meta_comprar(request, pk):
         if meta.estado != "simulacion":
             messages.error(request, "Esta compra ya fue registrada.")
             return redirect("meta_detalle", pk=meta.pk)
-        categoria, _ = Categoria.objects.get_or_create(
-            usuario=request.user, nombre="Cuotas", tipo="gasto"
-        )
         fecha_inicial = datos["fecha_primera_cuota"]
         meta.estado = "comprada"
         meta.cuotas = datos["cuotas"]
@@ -355,42 +357,224 @@ def meta_comprar(request, pk):
              for i, monto in enumerate(plan["importes"])),
             start=1,
         ):
-            movimiento = Movimiento.objects.create(
-                usuario=request.user,
-                tipo="gasto",
-                cuenta="banco",
-                monto=monto,
-                fecha=fecha,
-                categoria=categoria,
-                descripcion=f"{meta.nombre} — cuota {indice}/{datos['cuotas']}",
-            )
             CuotaMeta.objects.create(
-                meta=meta, movimiento=movimiento, numero=indice, fecha=fecha, monto=monto
+                meta=meta,
+                movimiento=None,
+                numero=indice,
+                fecha_vencimiento=fecha,
+                monto=monto,
+                estado="pendiente",
             )
-    messages.success(request, "Compra registrada y cuotas agregadas a tus movimientos.")
+    messages.success(request, "Compra registrada. Las cuotas están pendientes de pago.")
     return redirect("meta_detalle", pk=meta.pk)
 
 
 @login_required
 @require_POST
-def meta_cancelar(request, pk):
+def cuota_pagar(request, pk):
+    with transaction.atomic():
+        cuota = get_object_or_404(
+            CuotaMeta.objects.select_for_update().select_related("meta"),
+            pk=pk,
+            meta__usuario=request.user,
+        )
+        if cuota.estado == "pagada":
+            messages.info(request, "Esta cuota ya fue marcada como pagada.")
+            return redirect("meta_detalle", pk=cuota.meta_id)
+
+        fecha_pago_val = request.POST.get("fecha_pago")
+        if fecha_pago_val:
+            try:
+                fecha_pago = date.fromisoformat(fecha_pago_val)
+            except ValueError:
+                fecha_pago = date.today()
+        else:
+            fecha_pago = date.today()
+
+        try:
+            monto = int(request.POST.get("monto", cuota.monto))
+            if monto <= 0:
+                monto = cuota.monto
+        except (TypeError, ValueError):
+            monto = cuota.monto
+
+        cuenta = request.POST.get("cuenta", "banco")
+        if cuenta not in ("efectivo", "banco"):
+            cuenta = "banco"
+
+        categoria, _ = Categoria.objects.get_or_create(
+            usuario=request.user, nombre="Cuotas", tipo="gasto"
+        )
+        movimiento = Movimiento.objects.create(
+            usuario=request.user,
+            tipo="gasto",
+            cuenta=cuenta,
+            monto=monto,
+            fecha=fecha_pago,
+            categoria=categoria,
+            descripcion=f"{cuota.meta.nombre} — cuota {cuota.numero}/{cuota.meta.cuotas}",
+        )
+        cuota.estado = "pagada"
+        cuota.fecha_pago = fecha_pago
+        cuota.monto = monto
+        cuota.movimiento = movimiento
+        cuota.save()
+
+        # Si todas las cuotas están pagadas, la meta pasa a estado "pagada"
+        if not cuota.meta.cuotas_programadas.filter(estado="pendiente").exists():
+            cuota.meta.estado = "pagada"
+            cuota.meta.save(update_fields=["estado"])
+
+    messages.success(request, f"Cuota {cuota.numero} marcada como pagada.")
+    return redirect("meta_detalle", pk=cuota.meta_id)
+
+
+@login_required
+@require_POST
+def cuota_deshacer(request, pk):
+    with transaction.atomic():
+        cuota = get_object_or_404(
+            CuotaMeta.objects.select_for_update().select_related("meta"),
+            pk=pk,
+            meta__usuario=request.user,
+        )
+        if cuota.estado == "pagada":
+            if cuota.movimiento:
+                mov = cuota.movimiento
+                cuota.movimiento = None
+                cuota.estado = "pendiente"
+                cuota.fecha_pago = None
+                cuota.save()
+                mov.delete()
+            else:
+                cuota.estado = "pendiente"
+                cuota.fecha_pago = None
+                cuota.save()
+
+            if cuota.meta.estado == "pagada":
+                cuota.meta.estado = "comprada"
+                cuota.meta.save(update_fields=["estado"])
+            messages.success(request, f"Pago de la cuota {cuota.numero} deshecho.")
+        else:
+            messages.info(request, "Esta cuota no está pagada.")
+    return redirect("meta_detalle", pk=cuota.meta_id)
+
+
+@login_required
+def meta_eliminar(request, pk):
     meta = get_object_or_404(MetaAhorro, pk=pk, usuario=request.user)
-    if meta.estado == "simulacion":
-        meta.delete()
-        messages.success(request, "Meta eliminada.")
-        return redirect("metas")
-    if meta.estado == "comprada":
+    cuotas_pagadas = meta.cuotas_programadas.filter(estado="pagada")
+    tiene_pagadas = cuotas_pagadas.exists()
+    cuotas_pagadas_count = cuotas_pagadas.count()
+    monto_pagado = cuotas_pagadas.aggregate(t=Sum("monto"))["t"] or 0
+
+    if request.method == "POST":
+        borrar_movimientos = request.POST.get("borrar_movimientos") == "1"
         with transaction.atomic():
-            meta = get_object_or_404(
-                MetaAhorro.objects.select_for_update(), pk=pk, usuario=request.user
-            )
-            if meta.estado == "comprada":
-                futuras = meta.cuotas_programadas.filter(fecha__gt=date.today())
-                Movimiento.objects.filter(cuota_meta__in=futuras).delete()
-                futuras.delete()
-                meta.estado = "anulada"
-                meta.save(update_fields=["estado"])
-        messages.success(request, "Compra anulada; las cuotas futuras fueron eliminadas.")
-        return redirect("meta_detalle", pk=meta.pk)
-    messages.error(request, "Esta meta ya está anulada.")
-    return redirect("meta_detalle", pk=meta.pk)
+            if borrar_movimientos:
+                mov_ids = list(
+                    cuotas_pagadas.filter(movimiento__isnull=False).values_list("movimiento_id", flat=True)
+                )
+                cuotas_pagadas.update(movimiento=None)
+                Movimiento.objects.filter(id__in=mov_ids, usuario=request.user).delete()
+            else:
+                cuotas_pagadas.update(movimiento=None)
+            meta.delete()
+        messages.success(request, f"Meta «{meta.nombre}» eliminada.")
+        return redirect("metas")
+
+    return render(request, "finanzas/meta_eliminar.html", {
+        "meta": meta,
+        "tiene_pagadas": tiene_pagadas,
+        "cuotas_pagadas_count": cuotas_pagadas_count,
+        "monto_pagado": monto_pagado,
+    })
+
+
+# ==========================================
+# PERFIL, TEMA E INGRESOS FIJOS
+# ==========================================
+
+@login_required
+@require_POST
+def cambiar_tema(request):
+    tema_val = request.POST.get("tema", "auto")
+    if tema_val not in ("auto", "light", "dark"):
+        tema_val = "auto"
+    perfil, _ = Perfil.objects.get_or_create(usuario=request.user)
+    perfil.tema = tema_val
+    perfil.save(update_fields=["tema"])
+    next_url = request.POST.get("next") or request.META.get("HTTP_REFERER") or "dashboard"
+    return redirect(next_url)
+
+
+@login_required
+def perfil(request):
+    usuario = request.user
+    perfil_obj, _ = Perfil.objects.get_or_create(usuario=usuario)
+    form_email = CambiarEmailForm(user=usuario, initial={"email": usuario.email})
+    form_pass = PasswordChangeForm(user=usuario)
+    form_ingreso = IngresoFijoForm()
+
+    if request.method == "POST":
+        accion = request.POST.get("accion")
+        if accion == "cambiar_email":
+            form_email = CambiarEmailForm(request.POST, user=usuario)
+            if form_email.is_valid():
+                usuario.email = form_email.cleaned_data["email"]
+                usuario.save(update_fields=["email"])
+                messages.success(request, "Correo electrónico actualizado con éxito.")
+                return redirect("perfil")
+        elif accion == "cambiar_password":
+            form_pass = PasswordChangeForm(user=usuario, data=request.POST)
+            if form_pass.is_valid():
+                user = form_pass.save()
+                update_session_auth_hash(request, user)
+                messages.success(request, "Contraseña actualizada con éxito.")
+                return redirect("perfil")
+        elif accion == "crear_ingreso":
+            form_ingreso = IngresoFijoForm(request.POST)
+            if form_ingreso.is_valid():
+                ing = form_ingreso.save(commit=False)
+                ing.usuario = usuario
+                ing.save()
+                messages.success(request, f"Ingreso fijo «{ing.nombre}» agregado.")
+                return redirect("perfil")
+
+    ingresos_fijos = usuario.ingresos_fijos.all()
+    total_esperado = ingresos_fijos.aggregate(t=Sum("monto"))["t"] or 0
+    tu_mes = servicios.calculo_tu_mes(usuario)
+
+    return render(request, "finanzas/perfil.html", {
+        "usuario": usuario,
+        "perfil": perfil_obj,
+        "form_email": form_email,
+        "form_pass": form_pass,
+        "form_ingreso": form_ingreso,
+        "ingresos_fijos": ingresos_fijos,
+        "total_esperado": total_esperado,
+        "tu_mes": tu_mes,
+    })
+
+
+@login_required
+def ingreso_fijo_editar(request, pk):
+    instancia = get_object_or_404(IngresoFijo, pk=pk, usuario=request.user)
+    form = IngresoFijoForm(request.POST or None, instance=instancia)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Ingreso fijo actualizado.")
+        return redirect("perfil")
+    return render(request, "finanzas/form.html", {
+        "form": form,
+        "titulo": "Editar ingreso fijo",
+        "volver": "perfil",
+    })
+
+
+@login_required
+@require_POST
+def ingreso_fijo_borrar(request, pk):
+    get_object_or_404(IngresoFijo, pk=pk, usuario=request.user).delete()
+    messages.success(request, "Ingreso fijo eliminado.")
+    return redirect("perfil")

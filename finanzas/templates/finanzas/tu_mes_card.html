@@ -1,0 +1,60 @@
+{% load clp %}
+<div class="card">
+  <h2>Tu mes</h2>
+  <div class="grid3">
+    <div class="kpi">
+      <div class="muted">Ingreso esperado {% if tu_mes.es_promedio %}(promedio){% endif %}</div>
+      <div class="valor ingreso">{{ tu_mes.ingreso_esperado|clp }}</div>
+      {% if tu_mes.es_promedio %}
+      <div class="muted" style="font-size:0.8rem">Promedio últimos 3 meses</div>
+      {% else %}
+      <div class="muted" style="font-size:0.8rem">Suma de tus ingresos fijos</div>
+      {% endif %}
+    </div>
+    <div class="kpi">
+      <div class="muted">Cuotas de este mes</div>
+      <div class="valor gasto">{{ tu_mes.cuotas_mes|clp }}</div>
+      <div class="muted" style="font-size:0.8rem">Pendientes este mes</div>
+    </div>
+    <div class="kpi">
+      <div class="muted">Gasto habitual</div>
+      <div class="valor gasto">{{ tu_mes.gasto_habitual|clp }}</div>
+      <div class="muted" style="font-size:0.8rem">Promedio últimos 3 meses (sin cuotas)</div>
+    </div>
+  </div>
+
+  <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+    {% if tu_mes.sin_ingresos %}
+    <div class="alerta cerca">
+      No tienes ingresos registrados. <a href="{% url 'perfil' %}">Registra tus ingresos fijos en tu perfil</a> para calcular tu capacidad de ahorro.
+    </div>
+    {% elif tu_mes.alerta_negativo %}
+    <div class="alerta excedido">
+      <div><strong>Disponible para ahorrar: <span class="gasto">{{ tu_mes.disponible_ahorro|clp }}</span></strong></div>
+      <div style="margin-top:4px">Este mes tus gastos y cuotas superan tus ingresos.</div>
+    </div>
+    {% else %}
+    <div class="alerta ok">
+      <div><strong>Disponible para ahorrar: {{ tu_mes.disponible_ahorro|clp }}</strong></div>
+      <div style="margin-top:4px">Puedes ahorrar {{ tu_mes.disponible_ahorro|clp }}, el {{ tu_mes.porcentaje_ahorro }}% de lo que recibes este mes.</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div style="margin-top:12px">
+    <div class="muted" style="margin-bottom:6px">
+      <strong>Deuda total pendiente:</strong> {{ tu_mes.deuda_pendiente|clp }}
+    </div>
+    {% if tu_mes.deuda_por_meta %}
+    <ul class="lista">
+      {% for d in tu_mes.deuda_por_meta %}
+      <li style="padding:6px 0">
+        <span><a href="{% url 'meta_detalle' d.meta_id %}">{{ d.meta }}</a> ({{ d.cuotas_count }} cuota{{ d.cuotas_count|pluralize }})</span>
+        <span class="monto gasto">{{ d.total|clp }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+</div>
+

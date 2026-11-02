@@ -19,5 +19,12 @@ urlpatterns = [
     path("metas/", views.metas, name="metas"),
     path("metas/<int:pk>/", views.meta_detalle, name="meta_detalle"),
     path("metas/<int:pk>/comprar/", views.meta_comprar, name="meta_comprar"),
-    path("metas/<int:pk>/cancelar/", views.meta_cancelar, name="meta_cancelar"),
+    path("metas/<int:pk>/eliminar/", views.meta_eliminar, name="meta_eliminar"),
+    path("metas/<int:pk>/cancelar/", views.meta_eliminar, name="meta_cancelar"),
+    path("cuotas/<int:pk>/pagar/", views.cuota_pagar, name="cuota_pagar"),
+    path("cuotas/<int:pk>/deshacer/", views.cuota_deshacer, name="cuota_deshacer"),
+    path("perfil/", views.perfil, name="perfil"),
+    path("perfil/tema/", views.cambiar_tema, name="cambiar_tema"),
+    path("perfil/ingresos-fijos/<int:pk>/editar/", views.ingreso_fijo_editar, name="ingreso_fijo_editar"),
+    path("perfil/ingresos-fijos/<int:pk>/borrar/", views.ingreso_fijo_borrar, name="ingreso_fijo_borrar"),
 ]

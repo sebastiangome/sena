@@ -1,21 +1,29 @@
 <!doctype html>
-<html lang="es">
+<html lang="es" data-theme="{{ tema_actual }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0f766e">
 <title>{% block titulo %}SENA{% endblock %} · SENA</title>
 <style>
-  :root {
+  :root, [data-theme="light"] {
     --bg: #f5f5f0; --card: #ffffff; --text: #1c1917; --muted: #78716c; --line: #e7e5e4;
     --accent: #0f766e; --accent-soft: #ccfbf1; --ingreso: #15803d; --gasto: #b91c1c;
     --warn: #b45309; --warn-soft: #fef3c7; --bad-soft: #fee2e2; --radius: 14px;
+    --btn-text: #ffffff;
+  }
+  [data-theme="dark"] {
+    --bg: #12110f; --card: #1c1b19; --text: #f5f5f4; --muted: #a8a29e; --line: #2e2c29;
+    --accent: #2dd4bf; --accent-soft: #134e4a; --ingreso: #4ade80; --gasto: #f87171;
+    --warn: #fbbf24; --warn-soft: #422006; --bad-soft: #450a0a;
+    --btn-text: #042f2e;
   }
   @media (prefers-color-scheme: dark) {
-    :root {
+    [data-theme="auto"] {
       --bg: #12110f; --card: #1c1b19; --text: #f5f5f4; --muted: #a8a29e; --line: #2e2c29;
       --accent: #2dd4bf; --accent-soft: #134e4a; --ingreso: #4ade80; --gasto: #f87171;
       --warn: #fbbf24; --warn-soft: #422006; --bad-soft: #450a0a;
+      --btn-text: #042f2e;
     }
   }
   * { box-sizing: border-box; }
@@ -25,24 +33,113 @@
   .barra { max-width: 760px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .logo { font-weight: 800; letter-spacing: .08em; font-size: 1.15rem; color: var(--text); }
   .logo span { color: var(--accent); }
-  nav { display: flex; gap: 4px; overflow-x: auto; }
-  nav a { padding: 6px 10px; border-radius: 8px; color: var(--muted); font-size: .9rem; white-space: nowrap; }
-  nav a.activo, nav a:hover { background: var(--accent-soft); color: var(--accent); }
+
+  .btn-hamburguesa {
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--text);
+    font-size: 1.3rem;
+    padding: 6px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .btn-hamburguesa:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .menu-backdrop {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 99;
+  }
+  .panel-lateral {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 290px;
+    max-width: 85vw;
+    background: var(--card);
+    border-left: 1px solid var(--line);
+    box-shadow: -4px 0 24px rgba(0,0,0,0.18);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    padding: 18px 16px;
+    overflow-y: auto;
+  }
+  .panel-lateral[hidden], .menu-backdrop[hidden] {
+    display: none !important;
+  }
+  .panel-cabecera {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 14px;
+    gap: 8px;
+  }
+  .usuario-info { flex: 1; min-width: 0; }
+  .usuario-nombre { display: block; font-size: 1.05rem; font-weight: 700; color: var(--text); }
+  .usuario-email { font-size: 0.82rem; color: var(--muted); word-break: break-all; margin-top: 2px; }
+  .btn-cerrar {
+    background: transparent;
+    border: 0;
+    color: var(--muted);
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    line-height: 1;
+  }
+  .btn-cerrar:hover {
+    color: var(--text);
+    background: var(--line);
+  }
+  .panel-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: auto;
+  }
+  .panel-nav a {
+    padding: 10px 12px;
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 0.95rem;
+    display: block;
+    transition: background 0.15s ease;
+  }
+  .panel-nav a.activo, .panel-nav a:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .panel-tema {
+    margin: 16px 0 12px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+  .panel-pie {
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+
   main { max-width: 760px; margin: 0 auto; padding: 16px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 14px; }
   h1 { font-size: 1.35rem; margin: 4px 0 14px; }
   h2 { font-size: 1rem; margin: 0 0 10px; }
   .muted { color: var(--muted); font-size: .88rem; }
-  @media (max-width: 600px) {
-    .barra { flex-wrap: wrap; padding-bottom: 8px; }
-    nav { width: 100%; flex-wrap: wrap; justify-content: space-between; }
-    nav a { padding: 6px 8px; font-size: .85rem; }
-  }
   .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .kpi .valor { font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
   .ingreso { color: var(--ingreso); } .gasto { color: var(--gasto); }
-  .btn { display: inline-block; border: 0; border-radius: 10px; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; background: var(--accent); color: #fff; }
-  @media (prefers-color-scheme: dark) { .btn { color: #042f2e; } }
+  .btn { display: inline-block; border: 0; border-radius: 10px; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; background: var(--accent); color: var(--btn-text); }
   .btn.sec { background: transparent; color: var(--accent); border: 1px solid var(--line); }
   .btn.peligro { background: transparent; color: var(--gasto); border: 1px solid var(--line); padding: 6px 10px; font-size: .85rem; }
   .acciones { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
@@ -55,6 +152,7 @@
   .alerta { padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; font-size: .92rem; }
   .alerta.cerca { background: var(--warn-soft); color: var(--warn); }
   .alerta.excedido { background: var(--bad-soft); color: var(--gasto); }
+  .alerta.ok { background: var(--accent-soft); color: var(--accent); }
   .msg { padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; background: var(--accent-soft); color: var(--accent); }
   .msg.error { background: var(--bad-soft); color: var(--gasto); }
   .barra-prog { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 6px; }
@@ -75,23 +173,98 @@
   <div class="barra">
     <a href="{% url 'dashboard' %}" class="logo">SE<span>NA</span></a>
     {% if user.is_authenticated %}
-    <nav>
-      {% with n=request.resolver_match.url_name %}
-      <a href="{% url 'dashboard' %}" class="{% if n == 'dashboard' %}activo{% endif %}">Resumen</a>
-      <a href="{% url 'movimientos' %}" class="{% if 'movimiento' in n %}activo{% endif %}">Movimientos</a>
-      <a href="{% url 'presupuestos' %}" class="{% if 'presupuesto' in n %}activo{% endif %}">Presupuestos</a>
-      <a href="{% url 'metas' %}" class="{% if 'meta' in n %}activo{% endif %}">Metas</a>
-      <a href="{% url 'categorias' %}" class="{% if 'categoria' in n %}activo{% endif %}">Categorías</a>
-      {% endwith %}
-      <form method="post" action="{% url 'logout' %}" style="margin:0">{% csrf_token %}<button class="btn sec" style="padding:6px 10px;font-size:.85rem">Salir</button></form>
-    </nav>
+    <button id="btn-abrir-menu" class="btn-hamburguesa" aria-label="Abrir menú" aria-expanded="false" aria-controls="panel-menu">☰</button>
     {% endif %}
   </div>
 </header>
+
+{% if user.is_authenticated %}
+<div id="menu-backdrop" class="menu-backdrop" hidden></div>
+<aside id="panel-menu" class="panel-lateral" role="dialog" aria-modal="true" aria-label="Menú principal" hidden>
+  <div class="panel-cabecera">
+    <div class="usuario-info">
+      <span class="usuario-nombre">{{ user.username }}</span>
+      <span class="usuario-email">{{ user.email|default:"Sin correo registrado" }}</span>
+    </div>
+    <button id="btn-cerrar-menu" class="btn-cerrar" aria-label="Cerrar menú">✕</button>
+  </div>
+
+  <nav class="panel-nav">
+    {% with n=request.resolver_match.url_name %}
+    <a href="{% url 'dashboard' %}" class="{% if n == 'dashboard' %}activo{% endif %}">Resumen</a>
+    <a href="{% url 'movimientos' %}" class="{% if 'movimiento' in n %}activo{% endif %}">Movimientos</a>
+    <a href="{% url 'presupuestos' %}" class="{% if 'presupuesto' in n %}activo{% endif %}">Presupuestos</a>
+    <a href="{% url 'metas' %}" class="{% if 'meta' in n %}activo{% endif %}">Metas</a>
+    <a href="{% url 'categorias' %}" class="{% if 'categoria' in n %}activo{% endif %}">Categorías</a>
+    <a href="{% url 'perfil' %}" class="{% if n == 'perfil' %}activo{% endif %}">Mi perfil</a>
+    {% endwith %}
+  </nav>
+
+  <div class="panel-tema">
+    <form method="post" action="{% url 'cambiar_tema' %}" id="form-cambiar-tema">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ request.get_full_path }}">
+      <label for="id-tema-select" style="margin-bottom:6px">Tema</label>
+      <select name="tema" id="id-tema-select" onchange="this.form.submit()">
+        <option value="light" {% if tema_actual == 'light' %}selected{% endif %}>Claro</option>
+        <option value="dark" {% if tema_actual == 'dark' %}selected{% endif %}>Oscuro</option>
+        <option value="auto" {% if tema_actual == 'auto' %}selected{% endif %}>Automático</option>
+      </select>
+    </form>
+  </div>
+
+  <div class="panel-pie">
+    <form method="post" action="{% url 'logout' %}" style="margin:0">
+      {% csrf_token %}
+      <button class="btn sec" style="width:100%;text-align:center">Cerrar sesión</button>
+    </form>
+  </div>
+</aside>
+{% endif %}
+
 <main>
   {% for m in messages %}<div class="msg {{ m.tags }}">{{ m }}</div>{% endfor %}
   {% block contenido %}{% endblock %}
 </main>
 {% block scripts %}{% endblock %}
+
+{% if user.is_authenticated %}
+<script>
+(function() {
+  const btnAbrir = document.getElementById("btn-abrir-menu");
+  const btnCerrar = document.getElementById("btn-cerrar-menu");
+  const panel = document.getElementById("panel-menu");
+  const backdrop = document.getElementById("menu-backdrop");
+
+  if (!btnAbrir || !panel) return;
+
+  function abrirMenu() {
+    panel.hidden = false;
+    if (backdrop) backdrop.hidden = false;
+    btnAbrir.setAttribute("aria-expanded", "true");
+    if (btnCerrar) btnCerrar.focus();
+    document.body.style.overflow = "hidden";
+  }
+
+  function cerrarMenu() {
+    panel.hidden = true;
+    if (backdrop) backdrop.hidden = true;
+    btnAbrir.setAttribute("aria-expanded", "false");
+    btnAbrir.focus();
+    document.body.style.overflow = "";
+  }
+
+  btnAbrir.addEventListener("click", abrirMenu);
+  if (btnCerrar) btnCerrar.addEventListener("click", cerrarMenu);
+  if (backdrop) backdrop.addEventListener("click", cerrarMenu);
+
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape" && !panel.hidden) {
+      cerrarMenu();
+    }
+  });
+})();
+</script>
+{% endif %}
 </body>
 </html>
